@@ -1,0 +1,57 @@
+name: Update DSH-CFIPS
+
+on:
+  # 每天 UTC 03:00 触发（北京时间 11:00）
+  schedule:
+    - cron: "0 3 * * *"
+  # 允许在 Actions 页面手动触发
+  workflow_dispatch:
+  # 抓取脚本或本工作流变更后也跑一次
+  push:
+    paths:
+      - "fetch_cf_ips.py"
+      - ".github/workflows/update-ips.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  update-ips:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Fetch latest Cloudflare IPs
+        run: python3 fetch_cf_ips.py
+
+      - name: Show diff (if any)
+        run: |
+          if git diff --quiet DSH-CFIPS.TXT; then
+            echo "No changes."
+          else
+            echo "Changes detected:"
+            git diff --stat DSH-CFIPS.TXT
+            echo "---"
+            git diff DSH-CFIPS.TXT | head -80
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet DSH-CFIPS.TXT; then
+            echo "DSH-CFIPS.TXT 未变化，跳过提交。"
+            exit 0
+          fi
+          git add DSH-CFIPS.TXT
+          ts=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          git commit -m "chore: update DSH-CFIPS.TXT (${ts})"
+          git push
