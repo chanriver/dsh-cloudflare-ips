@@ -11,13 +11,9 @@ fetch_cf_ips.py
 """
 import re
 import sys
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.request import urlopen, Request
 from ssl import create_default_context
-
-# 时区：北京时间
-CST = timezone(timedelta(hours=8))
 
 # 数据源（通过 Jina Reader 把网页转成 markdown，省去 HTML 解析）
 SOURCES = {
@@ -115,46 +111,22 @@ def merge_and_dedup(*groups: dict[str, list[str]]) -> dict[str, list[str]]:
     return {line: list(ips.keys()) for line, ips in merged.items()}
 
 
-def render(by_line: dict[str, list[str]], src_counts: dict[str, dict[str, int]]) -> str:
-    """生成 TXT 内容"""
-    now = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S %z")
-    total = sum(len(ips) for ips in by_line.values())
-    lines: list[str] = [
-        "# DSH-CFIPS.TXT",
-        "# Cloudflare 优选 IP 订阅源（电信 + 多线，IPv4 only）",
-        "# 数据来源：",
-        "#   1. https://api.uouin.com/cloudflare.html",
-        "#   2. https://www.wetest.vip/page/cloudflare/address_v4.html",
-        f"# 生成时间：{now}",
-        f"# IP 总数：{total}（去重后）",
-        "# 格式：IP:PORT（端口固定 443，Cloudflare HTTPS 标准端口）",
-        "",
-    ]
-
-    # 按固定顺序输出
-    for line_name in ["电信", "多线"]:
-        ips = by_line.get(line_name, [])
-        if not ips:
-            continue
-        lines.append(f"# ----- {line_name} -----")
-        lines.extend(f"{ip}:{PORT}" for ip in ips)
-        lines.append("")
-
-    # 数据来源统计（附在末尾，便于追溯）
-    lines.append("# ----- 数据来源统计 -----")
-    for src, counts in src_counts.items():
-        lines.append(f"# {src}: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
-    lines.append("")
-    return "\n".join(lines)
+def render(by_line: dict[str, list[str]]) -> str:
+    """生成 TXT 内容（纯 IP:PORT 列表，无任何注释）"""
+    # 固定顺序合并输出：先电信，再多线，保持稳定顺序
+    ordered_lines = ["电信", "多线"]
+    out: list[str] = []
+    for line_name in ordered_lines:
+        for ip in by_line.get(line_name, []):
+            out.append(f"{ip}:{PORT}")
+    # 末尾加一个换行，符合 POSIX 文本文件惯例
+    return "\n".join(out) + "\n"
 
 
 def main() -> int:
-    src_counts: dict[str, dict[str, int]] = {}
-
     try:
         md_uouin = fetch_markdown(SOURCES["api.uouin.com"]["url"])
         parsed_uouin = parse_uouin(md_uouin)
-        src_counts["api.uouin.com"] = {k: len(v) for k, v in parsed_uouin.items()}
         print(f"[ok] api.uouin.com: {parsed_uouin}", file=sys.stderr)
     except Exception as e:
         print(f"[err] api.uouin.com failed: {e}", file=sys.stderr)
@@ -163,7 +135,6 @@ def main() -> int:
     try:
         md_wetest = fetch_markdown(SOURCES["wetest.vip"]["url"])
         parsed_wetest = parse_wetest(md_wetest)
-        src_counts["wetest.vip"] = {k: len(v) for k, v in parsed_wetest.items()}
         print(f"[ok] wetest.vip: {parsed_wetest}", file=sys.stderr)
     except Exception as e:
         print(f"[err] wetest.vip failed: {e}", file=sys.stderr)
@@ -174,7 +145,7 @@ def main() -> int:
         return 1
 
     merged = merge_and_dedup(parsed_uouin, parsed_wetest)
-    content = render(merged, src_counts)
+    content = render(merged)
     OUTPUT.write_text(content, encoding="utf-8")
     total = sum(len(v) for v in merged.values())
     print(f"[done] wrote {total} IPs to {OUTPUT}", file=sys.stderr)
